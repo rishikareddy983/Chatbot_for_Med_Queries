@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:3000"}})
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": ["http://localhost:3000", "http://192.168.0.123:3000"]}})
 
 login("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")
 
@@ -65,10 +65,12 @@ model = AutoModelForCausalLM.from_pretrained(
 embed_model = SentenceTransformer('all-mpnet-base-v2', device=device)
 
 index_path = r"C:\Users\rajiv\OneDrive\Desktop\projecttt\rishika2rag"
-faiss_index = faiss.read_index(os.path.join(index_path, "index.faiss"))
-
 with open(os.path.join(index_path, "index.pkl"), "rb") as f:
     stored_docs = pickle.load(f)
+faiss_index = faiss.read_index(os.path.join(index_path, "index.faiss"))
+embed_model = SentenceTransformer('all-mpnet-base-v2', device=device)
+
+docstore, doc_mapping = stored_docs
 
 class User(UserMixin):
     def __init__(self, user_data):
@@ -107,18 +109,24 @@ conversations = {}
 def get_top_rag_answers(question, k=5):
     q_embedding = embed_model.encode([question])[0]
     D, I = faiss_index.search(np.array([q_embedding]).astype('float32'), k)
-    if isinstance(stored_docs, dict):
-        return [stored_docs.get(str(i), "Document found") for i in I[0]]
-    elif isinstance(stored_docs, (list, tuple)):
-        return [stored_docs[i] if i < len(stored_docs) else "Document not found" for i in I[0]]
-    else:
-        raise ValueError(f"Unexpected type for stored_docs: {type(stored_docs)}")
+    
+    print("FAISS Index Results (IDs):", I[0])
+    print("FAISS Distances:", D[0])
+    
+    doc_ids = [doc_mapping.get(i) for i in I[0] if i in doc_mapping]
+    answers = [docstore._dict.get(doc_id, "Document not found") for doc_id in doc_ids]
+    
+    return [answer.page_content if hasattr(answer, 'page_content') else str(answer) for answer in answers]
 
 def answer_question(user_id, question):
     if user_id not in conversations:
         conversations[user_id] = Conversation()
     conversation = conversations[user_id]
     rag_answers = get_top_rag_answers(question)
+    # Print the top RAG answers to the terminal
+    print(f"Top 5 RAG Answers for question '{question}':")
+    for i, answer in enumerate(rag_answers, start=1):
+        print(f"{i}. {answer[:200]}...")  # Print the first 200 characters of each answer
     final_answer = combine_answers(conversation, question, rag_answers)
     conversation.add_exchange(question, final_answer)
     return final_answer
@@ -147,7 +155,7 @@ Answer:"""
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
-            max_new_tokens=150,
+            max_new_tokens=256,
             temperature=0.7,
             top_p=0.95,
             do_sample=True
